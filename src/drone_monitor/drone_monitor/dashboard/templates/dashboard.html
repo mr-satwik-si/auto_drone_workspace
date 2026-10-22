@@ -1,0 +1,843 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Drone Room Monitor</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.6.1/socket.io.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    :root {
+      --bg:        #080c14;
+      --panel:     #0d1520;
+      --border:    #1a2840;
+      --accent1:   #00d4ff;
+      --accent2:   #ff3b3b;
+      --green:     #00e676;
+      --amber:     #ffab00;
+      --text:      #c8d8f0;
+      --muted:     #4a6080;
+      --glow1:     rgba(0,212,255,0.15);
+      --glow2:     rgba(255,59,59,0.15);
+    }
+
+    body {
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    /* Animated background grid */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background-image:
+        linear-gradient(rgba(0,212,255,0.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(0,212,255,0.03) 1px, transparent 1px);
+      background-size: 40px 40px;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    /* Header */
+    header {
+      position: relative;
+      z-index: 10;
+      background: linear-gradient(135deg, #0a1628 0%, #0d1e35 100%);
+      border-bottom: 1px solid var(--border);
+      padding: 14px 28px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.4);
+    }
+
+    .header-left {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .logo {
+      width: 42px; height: 42px;
+      background: linear-gradient(135deg, var(--accent1), #0088cc);
+      border-radius: 10px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 22px;
+      box-shadow: 0 0 20px var(--glow1);
+    }
+
+    .header-title h1 {
+      font-size: 20px;
+      font-weight: 700;
+      color: #fff;
+      letter-spacing: 0.5px;
+    }
+
+    .header-title p {
+      font-size: 11px;
+      color: var(--muted);
+      margin-top: 1px;
+    }
+
+    .header-right {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .status-pill {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 6px 14px;
+      font-size: 12px;
+    }
+
+    .status-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 8px var(--green);
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+
+    .time-display {
+      font-size: 13px;
+      color: var(--muted);
+      font-family: monospace;
+    }
+
+    /* Main layout */
+    .layout {
+      position: relative;
+      z-index: 1;
+      display: grid;
+      grid-template-columns: 1fr 340px;
+      gap: 0;
+      height: calc(100vh - 71px);
+    }
+
+    /* Left panel — cameras */
+    .cameras-panel {
+      padding: 16px;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      grid-template-rows: 1fr 1fr;
+      gap: 12px;
+      overflow: hidden;
+    }
+
+    .cam-card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      transition: border-color 0.3s;
+      position: relative;
+    }
+
+    .cam-card:hover {
+      border-color: var(--accent1);
+    }
+
+    .cam-card.fire-alert {
+      border-color: var(--accent2) !important;
+      box-shadow: 0 0 20px var(--glow2);
+      animation: fire-pulse 1s infinite;
+    }
+
+    @keyframes fire-pulse {
+      0%, 100% { box-shadow: 0 0 20px var(--glow2); }
+      50%       { box-shadow: 0 0 40px rgba(255,59,59,0.4); }
+    }
+
+    .cam-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 12px;
+      background: rgba(0,0,0,0.3);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .cam-title {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .cam-live {
+      background: var(--accent2);
+      color: #fff;
+      font-size: 9px;
+      font-weight: 700;
+      padding: 2px 6px;
+      border-radius: 4px;
+      letter-spacing: 1px;
+    }
+
+    .cam-live.active { background: var(--green); }
+
+    .cam-body {
+      flex: 1;
+      position: relative;
+      overflow: hidden;
+      background: #000;
+    }
+
+    .cam-body img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+
+    .fire-overlay {
+      position: absolute;
+      bottom: 0; left: 0; right: 0;
+      background: linear-gradient(transparent, rgba(255,59,59,0.9));
+      padding: 8px 12px 6px;
+      font-size: 12px;
+      font-weight: 700;
+      color: #fff;
+      display: none;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .fire-overlay.show { display: flex; }
+
+    /* Right panel — data */
+    .data-panel {
+      border-left: 1px solid var(--border);
+      background: var(--panel);
+      display: flex;
+      flex-direction: column;
+      overflow-y: auto;
+      padding: 16px;
+      gap: 12px;
+    }
+
+    /* Section header */
+    .section-label {
+      font-size: 10px;
+      font-weight: 700;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 2px;
+      margin-bottom: 2px;
+    }
+
+    /* Drone status cards */
+    .drone-status-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .drone-card {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px;
+    }
+
+    .drone-card.d1 { border-top: 2px solid var(--accent1); }
+    .drone-card.d2 { border-top: 2px solid var(--accent2); }
+
+    .drone-name {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .drone-name span {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      display: inline-block;
+    }
+
+    .d1 .drone-name span { background: var(--accent1); box-shadow: 0 0 6px var(--accent1); }
+    .d2 .drone-name span { background: var(--accent2); box-shadow: 0 0 6px var(--accent2); }
+
+    .batt-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 6px;
+    }
+
+    .batt-pct {
+      font-size: 22px;
+      font-weight: 700;
+      color: #fff;
+    }
+
+    .batt-icon { font-size: 16px; }
+
+    .batt-bar {
+      height: 5px;
+      background: var(--border);
+      border-radius: 3px;
+      overflow: hidden;
+      margin-bottom: 6px;
+    }
+
+    .batt-fill {
+      height: 100%;
+      border-radius: 3px;
+      transition: width 0.5s ease;
+    }
+
+    .d1 .batt-fill { background: linear-gradient(90deg, var(--accent1), #0088cc); }
+    .d2 .batt-fill { background: linear-gradient(90deg, var(--accent2), #ff8800); }
+
+    .drone-state {
+      font-size: 11px;
+      color: var(--green);
+      font-weight: 600;
+    }
+
+    .drone-state.charging { color: var(--amber); }
+    .drone-state.returning { color: var(--accent2); }
+
+    /* Map */
+    .map-wrap {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px;
+    }
+
+    .map-canvas {
+      position: relative;
+      background: #050a10;
+      border-radius: 8px;
+      height: 160px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+    }
+
+    .map-grid {
+      position: absolute;
+      inset: 0;
+      background-image:
+        linear-gradient(rgba(0,212,255,0.05) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(0,212,255,0.05) 1px, transparent 1px);
+      background-size: 25% 25%;
+    }
+
+    .map-wall {
+      position: absolute;
+      inset: 0;
+      border: 2px solid rgba(0,212,255,0.2);
+      border-radius: 4px;
+    }
+
+    .map-dock {
+      position: absolute;
+      width: 10px; height: 10px;
+      border-radius: 3px;
+      transform: translate(-50%, -50%);
+    }
+
+    .map-dock.d1 {
+      background: var(--green);
+      box-shadow: 0 0 8px var(--green);
+      left: 5%; top: 92%;
+    }
+
+    .map-dock.d2 {
+      background: var(--accent2);
+      box-shadow: 0 0 8px var(--accent2);
+      left: 95%; top: 8%;
+    }
+
+    .map-drone {
+      position: absolute;
+      width: 14px; height: 14px;
+      border-radius: 50%;
+      transform: translate(-50%, -50%);
+      transition: left 0.4s ease, top 0.4s ease;
+    }
+
+    #drone1-dot {
+      background: var(--accent1);
+      box-shadow: 0 0 12px var(--accent1);
+      border: 2px solid #fff;
+    }
+
+    #drone2-dot {
+      background: var(--accent2);
+      box-shadow: 0 0 12px var(--accent2);
+      border: 2px solid #fff;
+    }
+
+    .map-coords {
+      display: flex;
+      justify-content: space-between;
+      margin-top: 8px;
+      font-size: 10px;
+      color: var(--muted);
+      font-family: monospace;
+    }
+
+    /* Sensor cards */
+    .sensor-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .sensor-card {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px;
+    }
+
+    .sensor-label {
+      font-size: 10px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-bottom: 6px;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    .sensor-val {
+      font-size: 26px;
+      font-weight: 700;
+      color: #fff;
+      line-height: 1;
+    }
+
+    .sensor-unit {
+      font-size: 12px;
+      color: var(--muted);
+      margin-left: 3px;
+    }
+
+    .sensor-bar {
+      height: 4px;
+      background: var(--border);
+      border-radius: 2px;
+      margin-top: 8px;
+      overflow: hidden;
+    }
+
+    .sensor-bar-fill {
+      height: 100%;
+      border-radius: 2px;
+      transition: width 0.5s ease;
+    }
+
+    .temp-fill  { background: linear-gradient(90deg, #00d4ff, #ff6600); }
+    .sound-fill { background: linear-gradient(90deg, #00d4ff, #aa00ff); }
+
+    /* Alerts */
+    .alerts-wrap {
+      flex: 1;
+      min-height: 0;
+    }
+
+    .alerts-list {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      max-height: 180px;
+      overflow-y: auto;
+    }
+
+    .alerts-list::-webkit-scrollbar { width: 4px; }
+    .alerts-list::-webkit-scrollbar-track { background: var(--border); }
+    .alerts-list::-webkit-scrollbar-thumb { background: var(--muted); border-radius: 2px; }
+
+    .alert-item {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 10px;
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+      animation: slide-in 0.3s ease;
+      font-size: 11px;
+    }
+
+    @keyframes slide-in {
+      from { opacity: 0; transform: translateY(-6px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    .alert-item.fire  { border-left: 3px solid var(--accent2); background: rgba(255,59,59,0.05); }
+    .alert-item.sound { border-left: 3px solid #aa00ff; }
+    .alert-item.temp  { border-left: 3px solid var(--amber); }
+
+    .alert-time { color: var(--muted); min-width: 48px; font-family: monospace; }
+    .alert-text { color: var(--text); line-height: 1.4; }
+
+    .no-alerts {
+      text-align: center;
+      color: var(--muted);
+      font-size: 12px;
+      padding: 20px;
+    }
+
+    /* Connection indicator */
+    .conn-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 12px;
+      font-size: 11px;
+    }
+
+    .conn-status { display: flex; align-items: center; gap: 6px; }
+    .conn-dot { width: 7px; height: 7px; border-radius: 50%; }
+    .conn-dot.ok { background: var(--green); box-shadow: 0 0 6px var(--green); }
+    .conn-dot.err { background: var(--accent2); }
+
+    /* Scrollbar for data panel */
+    .data-panel::-webkit-scrollbar { width: 4px; }
+    .data-panel::-webkit-scrollbar-track { background: transparent; }
+    .data-panel::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="header-left">
+    <div class="logo">🚁</div>
+    <div class="header-title">
+      <h1>Drone Room Monitor</h1>
+      <p>Autonomous Multi-Drone Surveillance System</p>
+    </div>
+  </div>
+  <div class="header-right">
+    <div class="status-pill">
+      <div class="status-dot" id="sys-dot"></div>
+      <span id="sys-status">System Online</span>
+    </div>
+    <div class="time-display" id="clock">--:--:--</div>
+  </div>
+</header>
+
+<div class="layout">
+
+  <!-- LEFT: Camera feeds -->
+  <div class="cameras-panel">
+
+    <div class="cam-card" id="cam1-card">
+      <div class="cam-header">
+        <div class="cam-title">📷 Drone 1 — Live Feed</div>
+        <div class="cam-live active" id="cam1-live">LIVE</div>
+      </div>
+      <div class="cam-body">
+        <img src="/camera_feed" alt="Drone 1"/>
+      </div>
+    </div>
+
+    <div class="cam-card" id="cam2-card">
+      <div class="cam-header">
+        <div class="cam-title">📷 Drone 2 — Live Feed</div>
+        <div class="cam-live" id="cam2-live">STANDBY</div>
+      </div>
+      <div class="cam-body">
+        <img src="/camera2_feed" alt="Drone 2"/>
+      </div>
+    </div>
+
+    <div class="cam-card" id="fire1-card">
+      <div class="cam-header">
+        <div class="cam-title">🔥 Drone 1 — Fire Detection</div>
+        <div class="cam-live active">ACTIVE</div>
+      </div>
+      <div class="cam-body">
+        <img src="/fire_feed" alt="Fire Detection 1"/>
+        <div class="fire-overlay" id="fire1-overlay">
+          🔥 FIRE DETECTED — Drone 1
+        </div>
+      </div>
+    </div>
+
+    <div class="cam-card" id="fire2-card">
+      <div class="cam-header">
+        <div class="cam-title">🔥 Drone 2 — Fire Detection</div>
+        <div class="cam-live active">ACTIVE</div>
+      </div>
+      <div class="cam-body">
+        <img src="/fire2_feed" alt="Fire Detection 2"/>
+        <div class="fire-overlay" id="fire2-overlay">
+          🔥 FIRE DETECTED — Drone 2
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- RIGHT: Data panel -->
+  <div class="data-panel">
+
+    <!-- Connection -->
+    <div class="conn-bar">
+      <div class="conn-status">
+        <div class="conn-dot ok" id="conn-dot"></div>
+        <span id="conn-text">Connected to ROS 2</span>
+      </div>
+      <span style="color:var(--muted);font-size:10px" id="uptime">--</span>
+    </div>
+
+    <!-- Drone status -->
+    <div>
+      <div class="section-label">Drone Status</div>
+      <div class="drone-status-grid">
+
+        <div class="drone-card d1">
+          <div class="drone-name"><span></span> Drone 1</div>
+          <div class="batt-row">
+            <div class="batt-pct" id="batt1-val">--<small style="font-size:14px">%</small></div>
+            <div class="batt-icon">🔋</div>
+          </div>
+          <div class="batt-bar">
+            <div class="batt-fill" id="batt1-bar" style="width:0%"></div>
+          </div>
+          <div class="drone-state" id="drone1-state">Patrolling</div>
+        </div>
+
+        <div class="drone-card d2">
+          <div class="drone-name"><span></span> Drone 2</div>
+          <div class="batt-row">
+            <div class="batt-pct" id="batt2-val">--<small style="font-size:14px">%</small></div>
+            <div class="batt-icon">🔋</div>
+          </div>
+          <div class="batt-bar">
+            <div class="batt-fill" id="batt2-bar" style="width:0%"></div>
+          </div>
+          <div class="drone-state" id="drone2-state">Standby</div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- Map -->
+    <div class="map-wrap">
+      <div class="section-label" style="margin-bottom:8px">Room Map</div>
+      <div class="map-canvas">
+        <div class="map-grid"></div>
+        <div class="map-wall"></div>
+        <div class="map-dock d1" title="Dock 1"></div>
+        <div class="map-dock d2" title="Dock 2"></div>
+        <div class="map-drone" id="drone1-dot" style="left:5%;top:92%"></div>
+        <div class="map-drone" id="drone2-dot" style="left:95%;top:8%"></div>
+      </div>
+      <div class="map-coords">
+        <span style="color:var(--accent1)">
+          D1: (<span id="d1x">0.0</span>, <span id="d1y">0.0</span>, <span id="d1z">0.0</span>m)
+        </span>
+        <span style="color:var(--accent2)">
+          D2: (<span id="d2x">4.0</span>, <span id="d2y">4.0</span>, <span id="d2z">0.0</span>m)
+        </span>
+      </div>
+    </div>
+
+    <!-- Sensors -->
+    <div>
+      <div class="section-label">Environmental Sensors</div>
+      <div class="sensor-grid">
+
+        <div class="sensor-card">
+          <div class="sensor-label">🌡 Temperature</div>
+          <div>
+            <span class="sensor-val" id="temp-val">--</span>
+            <span class="sensor-unit">°C</span>
+          </div>
+          <div class="sensor-bar">
+            <div class="sensor-bar-fill temp-fill" id="temp-bar" style="width:0%"></div>
+          </div>
+        </div>
+
+        <div class="sensor-card">
+          <div class="sensor-label">🔊 Sound Level</div>
+          <div>
+            <span class="sensor-val" id="sound-val">--</span>
+            <span class="sensor-unit">dB</span>
+          </div>
+          <div class="sensor-bar">
+            <div class="sensor-bar-fill sound-fill" id="sound-bar" style="width:0%"></div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- Alerts -->
+    <div class="alerts-wrap">
+      <div class="section-label">Recent Alerts</div>
+      <ul class="alerts-list" id="alerts-list">
+        <li class="no-alerts">No alerts yet</li>
+      </ul>
+    </div>
+
+  </div>
+</div>
+
+<script>
+  const socket = io();
+  let startTime = Date.now();
+
+  // Clock
+  setInterval(() => {
+    const now = new Date();
+    document.getElementById('clock').textContent =
+      now.toTimeString().slice(0,8);
+    const up = Math.floor((Date.now() - startTime) / 1000);
+    const m  = Math.floor(up / 60).toString().padStart(2,'0');
+    const s  = (up % 60).toString().padStart(2,'0');
+    document.getElementById('uptime').textContent = `Uptime ${m}:${s}`;
+  }, 1000);
+
+  socket.on('connect', () => {
+    document.getElementById('conn-dot').className  = 'conn-dot ok';
+    document.getElementById('conn-text').textContent = 'Connected to ROS 2';
+    document.getElementById('sys-dot').style.background = 'var(--green)';
+    document.getElementById('sys-status').textContent   = 'System Online';
+  });
+
+  socket.on('disconnect', () => {
+    document.getElementById('conn-dot').className  = 'conn-dot err';
+    document.getElementById('conn-text').textContent = 'Disconnected';
+    document.getElementById('sys-dot').style.background = 'var(--accent2)';
+    document.getElementById('sys-status').textContent   = 'System Offline';
+  });
+
+  socket.on('update', (data) => {
+    // Temperature
+    document.getElementById('temp-val').textContent = data.temperature;
+    document.getElementById('temp-bar').style.width =
+      Math.min(data.temperature / 50 * 100, 100) + '%';
+
+    // Sound
+    document.getElementById('sound-val').textContent = data.sound_level;
+    document.getElementById('sound-bar').style.width =
+      Math.min(data.sound_level / 100 * 100, 100) + '%';
+
+    // Drone 1 battery
+    const b1 = data.battery;
+    document.getElementById('batt1-val').innerHTML =
+      b1 + '<small style="font-size:14px">%</small>';
+    document.getElementById('batt1-bar').style.width = b1 + '%';
+    document.getElementById('batt1-bar').style.background =
+      b1 < 30 ? 'linear-gradient(90deg,#ff3b3b,#ff6600)' :
+      'linear-gradient(90deg,var(--accent1),#0088cc)';
+
+    const s1El = document.getElementById('drone1-state');
+    s1El.textContent = data.status;
+    s1El.className   = 'drone-state' +
+      (data.status.includes('Charg') ? ' charging' :
+       data.status.includes('Return') ? ' returning' : '');
+
+    // Drone 2 battery
+    const b2 = data.battery2;
+    document.getElementById('batt2-val').innerHTML =
+      b2 + '<small style="font-size:14px">%</small>';
+    document.getElementById('batt2-bar').style.width = b2 + '%';
+    document.getElementById('batt2-bar').style.background =
+      b2 < 30 ? 'linear-gradient(90deg,#ff3b3b,#ff6600)' :
+      'linear-gradient(90deg,var(--accent2),#ff8800)';
+
+    const s2El = document.getElementById('drone2-state');
+    s2El.textContent = data.status2 || 'Standby';
+    s2El.className   = 'drone-state' +
+      (data.status2 && data.status2.includes('Charg') ? ' charging' :
+       data.status2 && data.status2.includes('Return') ? ' returning' : '');
+
+    // Fire detection
+    const fire = data.fire_detected;
+    document.getElementById('fire1-card').classList.toggle('fire-alert', fire);
+    document.getElementById('fire1-overlay').classList.toggle('show', fire);
+    document.getElementById('fire2-card').classList.toggle('fire-alert', fire);
+    document.getElementById('fire2-overlay').classList.toggle('show', fire);
+
+    // Drone positions on map
+    const W = 260, H = 160;
+    const d1x = 8  + (data.drone_x  / 4.0) * (W - 16);
+    const d1y = H - 8 - (data.drone_y  / 4.0) * (H - 16);
+    const d2x = 8  + (data.drone2_x / 4.0) * (W - 16);
+    const d2y = H - 8 - (data.drone2_y / 4.0) * (H - 16);
+
+    document.getElementById('drone1-dot').style.left = (d1x / W * 100) + '%';
+    document.getElementById('drone1-dot').style.top  = (d1y / H * 100) + '%';
+    document.getElementById('drone2-dot').style.left = (d2x / W * 100) + '%';
+    document.getElementById('drone2-dot').style.top  = (d2y / H * 100) + '%';
+
+    document.getElementById('d1x').textContent = data.drone_x.toFixed(1);
+    document.getElementById('d1y').textContent = data.drone_y.toFixed(1);
+    document.getElementById('d1z').textContent = data.drone_z.toFixed(1);
+    document.getElementById('d2x').textContent = data.drone2_x.toFixed(1);
+    document.getElementById('d2y').textContent = data.drone2_y.toFixed(1);
+    document.getElementById('d2z').textContent = data.drone2_z.toFixed(1);
+  });
+
+  socket.on('new_alert', (alert) => {
+    const list = document.getElementById('alerts-list');
+    const noAlert = list.querySelector('.no-alerts');
+    if (noAlert) noAlert.remove();
+
+    const li = document.createElement('li');
+    const type = alert.message.includes('FIRE') ? 'fire' :
+                 alert.message.includes('TEMP') ? 'temp' : 'sound';
+    li.className = 'alert-item ' + type;
+    li.innerHTML = `
+      <span class="alert-time">${alert.time}</span>
+      <span class="alert-text">${alert.message}</span>`;
+    list.insertBefore(li, list.firstChild);
+    if (list.children.length > 8) list.removeChild(list.lastChild);
+  });
+
+  // Drone 2 live indicator
+  socket.on('cam_switch', (data) => {
+    const d2live = document.getElementById('cam2-live');
+    if (data.active === 'drone2') {
+      d2live.textContent = 'LIVE';
+      d2live.className   = 'cam-live active';
+    } else {
+      d2live.textContent = 'STANDBY';
+      d2live.className   = 'cam-live';
+    }
+  });
+</script>
+</body>
+</html>
